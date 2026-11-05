@@ -11,7 +11,7 @@
     .row { margin-bottom: 8px; }
     .status { font-weight: bold; }
     .muted { color: #6b778c; font-size: 12px; }
-    .err { color: #c9372c; font-size: 12px; }
+    .err { color: #c9372c; font-size: 12px; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -24,17 +24,57 @@
     <button id="toggleBtn" style="display:none"></button>
   </div>
   <div id="msg" class="err"></div>
-  <div class="muted">※ 元ボードへの移動処理は次のステップで追加します。</div>
+  <div class="muted">このボードで「受け渡し」リストに移したミラーカードを、元ボードの「受け渡し」リストにも移します。</div>
 
   <script>
+    var API = 'https://api.trello.com/1';
+    var KEY = HANDOVER_CONFIG.appKey;
     var t = TrelloPowerUp.iframe({
       appKey: HANDOVER_CONFIG.appKey,
       appName: HANDOVER_CONFIG.appName
     });
     var api = t.getRestApi();
-    var current = { authorized: false, enabled: false, boardId: null };
+    var current = { authorized: false, enabled: false, boardId: null, webhookId: null };
 
     function $(id) { return document.getElementById(id); }
+
+    function jfetch(url, opts) {
+      return fetch(url, opts).then(function (r) {
+        return r.text().then(function (txt) {
+          if (!r.ok) throw new Error(r.status + ' ' + txt);
+          try { return JSON.parse(txt); } catch (e) { return txt; }
+        });
+      });
+    }
+
+    // 同じボード・同じURLのWebhookが既にあれば再利用し、なければ作る
+    function ensureWebhook(token, boardId) {
+      var url = HANDOVER_CONFIG.webhookUrl;
+      return jfetch(API + '/tokens/' + token + '/webhooks?key=' + KEY).then(function (list) {
+        var found = (list || []).filter(function (w) {
+          return w.idModel === boardId && w.callbackURL === url;
+        })[0];
+        if (found) return found.id;
+        return jfetch(API + '/webhooks/?key=' + KEY + '&token=' + token, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description: '受渡連動',
+            callbackURL: url,
+            idModel: boardId
+          })
+        }).then(function (w) { return w.id; });
+      });
+    }
+
+    function removeWebhook(token, webhookId) {
+      if (!webhookId) return Promise.resolve();
+      return fetch(API + '/webhooks/' + webhookId + '?key=' + KEY + '&token=' + token, {
+        method: 'DELETE'
+      }).then(function (r) {
+        if (!r.ok && r.status !== 404) throw new Error('Webhook削除に失敗: ' + r.status);
+      });
+    }
 
     function render() {
       return Promise.all([
@@ -42,9 +82,11 @@
         t.board('id', 'name'),
         t.get('board', 'shared', 'handoverSync')
       ]).then(function (r) {
+        var state = r[2] || {};
         current.authorized = !!r[0];
         current.boardId = r[1].id;
-        current.enabled = !!(r[2] && r[2].enabled);
+        current.enabled = !!state.enabled;
+        current.webhookId = state.webhookId || null;
 
         $('board').textContent = r[1].name;
         $('auth').textContent = current.authorized ? '済み' : '未連携';
@@ -60,6 +102,7 @@
 
     function showError(e) {
       $('msg').textContent = 'エラー: ' + (e && e.message ? e.message : e);
+      $('toggleBtn').disabled = false;
     }
 
     $('authBtn').addEventListener('click', function () {
@@ -69,15 +112,36 @@
 
     $('toggleBtn').addEventListener('click', function () {
       $('msg').textContent = '';
-      var p = current.enabled
-        ? t.remove('board', 'shared', 'handoverSync')
-        : t.set('board', 'shared', 'handoverSync', {
+      $('toggleBtn').disabled = true;
+
+      var task;
+      if (current.enabled) {
+        // OFF: Webhookを削除してから、状態を消す
+        task = api.getToken().then(function (token) {
+          return removeWebhook(token, current.webhookId);
+        }).then(function () {
+          return t.remove('board', 'shared', 'handoverSync');
+        });
+      } else {
+        // ON: Webhookを登録してから、状態を保存する
+        if (!HANDOVER_CONFIG.webhookUrl || HANDOVER_CONFIG.webhookUrl.indexOf('https://') !== 0) {
+          return showError('config.js の webhookUrl が未設定です');
+        }
+        task = api.getToken().then(function (token) {
+          return ensureWebhook(token, current.boardId);
+        }).then(function (webhookId) {
+          return t.set('board', 'shared', 'handoverSync', {
             enabled: true,
             boardId: current.boardId,
+            webhookId: webhookId,
             at: new Date().toISOString()
           });
-      // ステップ2で、ここにWebhookの登録/削除を追加する
-      p.then(render).catch(showError);
+        });
+      }
+
+      task.then(render).then(function () {
+        $('toggleBtn').disabled = false;
+      }).catch(showError);
     });
 
     render().catch(showError);
