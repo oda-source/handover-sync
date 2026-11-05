@@ -22,7 +22,9 @@
   <div class="row">
     <button id="authBtn" class="mod-primary" style="display:none">Trelloと連携する</button>
     <button id="toggleBtn" style="display:none"></button>
+    <button id="checkBtn" style="display:none">状態を確認</button>
   </div>
+  <div id="info" class="muted" style="word-break:break-all"></div>
   <div id="msg" class="err"></div>
   <div class="muted">このボードで「受け渡し」リストに移したミラーカードを、元ボードの「受け渡し」リストにも移します。</div>
 
@@ -96,6 +98,7 @@
         $('toggleBtn').style.display = current.authorized ? '' : 'none';
         $('toggleBtn').textContent = current.enabled ? '連動をOFFにする' : '連動をONにする';
         $('toggleBtn').className = current.enabled ? '' : 'mod-primary';
+        $('checkBtn').style.display = (current.authorized && current.enabled) ? '' : 'none';
         t.sizeTo(document.body).catch(function () {});
       });
     }
@@ -142,6 +145,31 @@
       task.then(render).then(function () {
         $('toggleBtn').disabled = false;
       }).catch(showError);
+    });
+
+    // Webhookの状態を表示する(原因調べ用)
+    $('checkBtn').addEventListener('click', function () {
+      $('msg').textContent = '';
+      var info = $('info');
+      info.textContent = '確認中…';
+      if (!current.webhookId) {
+        info.textContent = 'Webhookが未登録です。一度OFFにして、もう一度ONにしてください。';
+        t.sizeTo(document.body).catch(function () {});
+        return;
+      }
+      api.getToken().then(function (token) {
+        return jfetch(API + '/webhooks/' + current.webhookId + '?key=' + KEY + '&token=' + token);
+      }).then(function (w) {
+        info.innerHTML =
+          '有効: ' + w.active + '<br>' +
+          '連続失敗回数: ' + w.consecutiveFailures + '<br>' +
+          '通知先: ' + w.callbackURL + '<br>' +
+          '設定のURL: ' + HANDOVER_CONFIG.webhookUrl;
+        t.sizeTo(document.body).catch(function () {});
+      }).catch(function (e) {
+        info.textContent = '';
+        showError(e);
+      });
     });
 
     render().catch(showError);
