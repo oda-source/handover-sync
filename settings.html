@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>受渡連動 設定</title>
+  <link rel="stylesheet" href="https://p.trellocdn.com/power-up.min.css">
+  <script src="https://p.trellocdn.com/power-up.min.js"></script>
+  <script src="./config.js"></script>
+  <style>
+    body { font-size: 14px; }
+    .row { margin-bottom: 8px; }
+    .status { font-weight: bold; }
+    .muted { color: #6b778c; font-size: 12px; }
+    .err { color: #c9372c; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="row">ボード: <span id="board">…</span></div>
+  <div class="row">Trello連携: <span id="auth" class="status">…</span></div>
+  <div class="row">連動: <span id="sync" class="status">…</span></div>
+
+  <div class="row">
+    <button id="authBtn" class="mod-primary" style="display:none">Trelloと連携する</button>
+    <button id="toggleBtn" style="display:none"></button>
+  </div>
+  <div id="msg" class="err"></div>
+  <div class="muted">※ 元ボードへの移動処理は次のステップで追加します。</div>
+
+  <script>
+    var t = TrelloPowerUp.iframe({
+      appKey: HANDOVER_CONFIG.appKey,
+      appName: HANDOVER_CONFIG.appName
+    });
+    var api = t.getRestApi();
+    var current = { authorized: false, enabled: false, boardId: null };
+
+    function $(id) { return document.getElementById(id); }
+
+    function render() {
+      return Promise.all([
+        api.isAuthorized(),
+        t.board('id', 'name'),
+        t.get('board', 'shared', 'handoverSync')
+      ]).then(function (r) {
+        current.authorized = !!r[0];
+        current.boardId = r[1].id;
+        current.enabled = !!(r[2] && r[2].enabled);
+
+        $('board').textContent = r[1].name;
+        $('auth').textContent = current.authorized ? '済み' : '未連携';
+        $('sync').textContent = current.enabled ? 'ON' : 'OFF';
+
+        $('authBtn').style.display = current.authorized ? 'none' : '';
+        $('toggleBtn').style.display = current.authorized ? '' : 'none';
+        $('toggleBtn').textContent = current.enabled ? '連動をOFFにする' : '連動をONにする';
+        $('toggleBtn').className = current.enabled ? '' : 'mod-primary';
+        t.sizeTo(document.body).catch(function () {});
+      });
+    }
+
+    function showError(e) {
+      $('msg').textContent = 'エラー: ' + (e && e.message ? e.message : e);
+    }
+
+    $('authBtn').addEventListener('click', function () {
+      $('msg').textContent = '';
+      api.authorize({ scope: 'read,write' }).then(render).catch(showError);
+    });
+
+    $('toggleBtn').addEventListener('click', function () {
+      $('msg').textContent = '';
+      var p = current.enabled
+        ? t.remove('board', 'shared', 'handoverSync')
+        : t.set('board', 'shared', 'handoverSync', {
+            enabled: true,
+            boardId: current.boardId,
+            at: new Date().toISOString()
+          });
+      // ステップ2で、ここにWebhookの登録/削除を追加する
+      p.then(render).catch(showError);
+    });
+
+    render().catch(showError);
+  </script>
+</body>
+</html>
