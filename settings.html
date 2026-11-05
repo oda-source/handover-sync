@@ -106,6 +106,7 @@
     function showError(e) {
       $('msg').textContent = 'エラー: ' + (e && e.message ? e.message : e);
       $('toggleBtn').disabled = false;
+      t.sizeTo(document.body).catch(function () {});
     }
 
     $('authBtn').addEventListener('click', function () {
